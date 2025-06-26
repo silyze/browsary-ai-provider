@@ -39,6 +39,23 @@ export type AiResult<T> = {
   messages: object[];
 };
 
+export type AiModelMessage = {
+  type: "system" | "user";
+  content: string;
+};
+
+export abstract class AiModel<TContext> {
+  public abstract prompt(
+    context: TContext,
+    messages: AiModelMessage[]
+  ): Promise<AiResult<string>>;
+  public abstract promptWithSchema<T>(
+    context: TContext,
+    messages: AiModelMessage[],
+    schema: object
+  ): Promise<AiResult<T>>;
+}
+
 export abstract class AiProvider<TContext, TConfig = {}> {
   protected config: TConfig;
   protected functionCall: (context: TContext, name: string, params: any) => any;
@@ -53,6 +70,11 @@ export abstract class AiProvider<TContext, TConfig = {}> {
     this.config = config;
     this.functionCall = functionCall;
   }
+
+  public abstract createModel<TModelContext>(
+    model: string,
+    context: TModelContext
+  ): AiModel<TModelContext>;
 
   public abstract analyze(
     context: TContext,
