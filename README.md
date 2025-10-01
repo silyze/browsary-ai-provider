@@ -1,6 +1,6 @@
 # Browsary AI Provider
 
-The Browsary AI Provider package defines core abstractions and interfaces for integrating AI-driven analysis and pipeline generation into the Browsary ecosystem.
+The Browsary AI Provider package defines the core abstractions and interfaces for integrating AI-driven analysis and pipeline generation into the Browsary ecosystem.
 
 ## Install
 
@@ -10,7 +10,7 @@ npm install @silyze/browsary-ai-provider
 
 ## Usage
 
-Import and use the interfaces and classes in your project:
+Create custom evaluators and providers by extending the supplied base classes:
 
 ```ts
 import {
@@ -24,12 +24,76 @@ import {
   GenericNode,
 } from "@silyze/browsary-ai-provider";
 
-// Example: creating your own AI provider and evaluator
+class MyAiEvaluator extends AiEvaluator<MyContext> {
+  async evaluate<TArgs extends any[], TResult>(
+    fn: (context: MyContext, ...args: TArgs) => TResult,
+    ...args: TArgs
+  ) {
+    // call into your AI runtime and return the result
+  }
+
+  createContext<TConfig>(
+    constructor: new (
+      config: TConfig,
+      functionCall: (
+        context: MyContext,
+        name: string,
+        params: any
+      ) => Promise<unknown>
+    ) => AiProvider<MyContext, TConfig>,
+    config: TConfig
+  ): AiEvaluationContext<MyContext> {
+    const provider = new constructor(config, this.evaluate.bind(this));
+    return { agent: this, provider };
+  }
+}
+
+class MyAiProvider extends AiProvider<MyContext, MyConfig> {
+  async analyze(...) { /* implement analysis */ }
+  async generate(...) { /* implement pipeline generation */ }
+}
+
+const evaluator = new MyAiEvaluator();
+const { provider } = evaluator.createContext(MyAiProvider, myConfig);
+const analysis = await provider.analyze(context, "Find buttons", {});
+const { result: pipeline } = await provider.generate(context, analysis.result, {});
 ```
+
+### Tracking Usage
+
+Expose token usage or other billing metrics by pairing calls to `emitStart` and `emitEnd`. They allow you to annotate requests with timestamps and usage numbers gathered from your underlying SDK.
+
+```ts
+const modelId = "gpt-4o";
+const start = provider.emitStart({
+  source: "model.prompt",
+  model: modelId,
+});
+
+const sdk = await callIntoYourModel();
+
+provider.emitEnd({
+  source: "model.prompt",
+  model: modelId,
+  startedAt: start.startedAt,
+  usage: {
+    inputTokens: sdk.usage?.prompt_tokens,
+    outputTokens: sdk.usage?.completion_tokens,
+    totalTokens: sdk.usage?.total_tokens,
+  },
+});
+```
+
+Place these hooks around every model invocation to keep downstream systems aware of runtime cost.
+
+### Analyze vs. Generate
+
+- `analyze` runs first and produces an `AnalysisResult` that describes findings and raw AI output.
+- `generate` consumes the analysis and returns a `Pipeline` ready to be executed or merged.
 
 ## API Reference
 
-### Types & Interfaces
+### Types and Interfaces
 
 #### `AnalyzeOutput`
 
@@ -45,8 +109,8 @@ export type AnalyzeOutput = {
 };
 ```
 
-- **selectors** — An array of discovered CSS selectors, with context and test status.
-- **metadata** — Additional context or notes collected during analysis.
+- selectors: Array of discovered CSS selectors, including context and test status.
+- metadata: Additional context or notes collected during analysis.
 
 #### `AnalysisResult`
 
@@ -57,8 +121,8 @@ export interface AnalysisResult {
 }
 ```
 
-- **analysis** — The raw output of the AI analysis step.
-- **prompt** — The actual prompt sent to the AI model.
+- analysis: The raw output of the AI analysis step.
+- prompt: The actual prompt sent to the AI model.
 
 #### `AiResult<T>`
 
@@ -69,8 +133,8 @@ export type AiResult<T> = {
 };
 ```
 
-- **result** — The final produced value (e.g., `AnalysisResult` or `Pipeline`).
-- **messages** — Log of messages exchanged with the AI service.
+- result: The final produced value (for example `AnalysisResult` or `Pipeline`).
+- messages: Log of messages exchanged with the AI service.
 
 #### `AiEvaluationContext<TContext>`
 
@@ -81,14 +145,12 @@ export interface AiEvaluationContext<TContext> {
 }
 ```
 
-- **agent** — An instance of `AiEvaluator`, responsible for calling AI functions.
-- **provider** — The configured `AiProvider` instance.
+- agent: Instance of `AiEvaluator`, responsible for calling AI functions.
+- provider: The configured `AiProvider` instance.
 
 ### Classes
 
 #### `AiEvaluator<TContext>`
-
-Abstract base class defining how to evaluate functions using AI.
 
 ```ts
 export abstract class AiEvaluator<TContext> {
@@ -111,12 +173,12 @@ export abstract class AiEvaluator<TContext> {
 }
 ```
 
-- **evaluate** — Runs a pure function under AI supervision.
-- **createContext** — Instantiates a provider context for analysis and generation.
+- evaluate: Runs a pure function under AI supervision.
+- createContext: Instantiates a provider context for analysis and generation.
 
 #### `AiProvider<TContext, TConfig>`
 
-Abstract class to be implemented by concrete AI backends.
+Abstract class implemented by concrete AI backends.
 
 ```ts
 export abstract class AiProvider<TContext, TConfig = {}> {
@@ -145,23 +207,13 @@ export abstract class AiProvider<TContext, TConfig = {}> {
 }
 ```
 
-- **analyze** — Produces an initial analysis of a user prompt against an existing pipeline.
-- **generate** — Builds or updates a `Pipeline` based on analysis results.
+- analyze: Produces an initial analysis of a user prompt against an existing pipeline.
+- generate: Builds or updates a `Pipeline` based on analysis results.
 
 ## Example Implementation
 
 ```ts
-class MyAiEvaluator extends AiEvaluator<MyContext> {
-  // implement evaluate and createContext...
-}
-
-class MyAiProvider extends AiProvider<MyContext, MyConfig> {
-  async analyze(...) { /* ... */ }
-  async generate(...) { /* ... */ }
-}
-
-// Usage:
-const evaluator = new MyAiEvaluator(...);
+const evaluator = new MyAiEvaluator();
 const { agent, provider } = evaluator.createContext(MyAiProvider, config);
 const analysis = await provider.analyze(context, "Find buttons", {});
 const { result: pipeline } = await provider.generate(context, analysis.result, {});

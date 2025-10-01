@@ -15,6 +15,72 @@ export interface AnalysisResult {
   prompt: string;
 }
 
+export type TokenUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+};
+
+export type UsageSource =
+  | "model.prompt"
+  | "model.promptWithSchema"
+  | "pipeline.analyze"
+  | "pipeline.generate"
+  | "function.call";
+
+export type UsageEventBase = {
+  id?: string;
+  source: UsageSource;
+  model?: string;
+  startedAt?: number;
+  endedAt?: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type UsageEventStart = UsageEventBase & { phase: "start" };
+export type UsageEventEnd = UsageEventBase & {
+  phase: "end";
+  usage?: TokenUsage;
+};
+
+export type UsageEvent = UsageEventStart | UsageEventEnd;
+
+export interface UsageMonitor {
+  onEvent(event: UsageEvent): void | Promise<void>;
+}
+
+export class NoopUsageMonitor implements UsageMonitor {
+  onEvent(_event: UsageEvent) {}
+}
+
+function nowMs(): number {
+  return Date.now();
+}
+
+export function emitStart(
+  monitor: UsageMonitor,
+  base: Omit<UsageEventStart, "phase" | "startedAt">
+): UsageEventStart {
+  const evt: UsageEventStart = { phase: "start", startedAt: nowMs(), ...base };
+  Promise.resolve(monitor.onEvent(evt)).catch(() => {});
+  return evt;
+}
+
+export function emitEnd(
+  monitor: UsageMonitor,
+  base: Omit<UsageEventEnd, "phase" | "endedAt">,
+  started?: number
+): UsageEventEnd {
+  const evt: UsageEventEnd = {
+    phase: "end",
+    endedAt: nowMs(),
+    startedAt: started ?? base.startedAt,
+    ...base,
+  };
+  Promise.resolve(monitor.onEvent(evt)).catch(() => {});
+  return evt;
+}
+
 export abstract class AiEvaluator<TContext> {
   abstract evaluate<TArgs extends any[], TResult>(
     fn: (context: TContext, ...args: TArgs) => TResult,
@@ -49,6 +115,7 @@ export abstract class AiModel<TContext> {
     context: TContext,
     messages: AiModelMessage[]
   ): Promise<AiResult<string>>;
+
   public abstract promptWithSchema<T>(
     context: TContext,
     messages: AiModelMessage[],
@@ -59,16 +126,62 @@ export abstract class AiModel<TContext> {
 export abstract class AiProvider<TContext, TConfig = {}> {
   protected config: TConfig;
   protected functionCall: (context: TContext, name: string, params: any) => any;
+
+  #monitor: UsageMonitor;
+
   public constructor(
     config: TConfig,
     functionCall: (
       context: TContext,
       name: string,
       params: any
-    ) => Promise<unknown>
+    ) => Promise<unknown>,
+    monitor?: UsageMonitor
   ) {
     this.config = config;
     this.functionCall = functionCall;
+    this.#monitor = monitor ?? new NoopUsageMonitor();
+  }
+
+  protected get monitor(): UsageMonitor {
+    return this.#monitor;
+  }
+
+  protected emitStart(base: Omit<UsageEventStart, "phase" | "startedAt">) {
+    return emitStart(this.#monitor, base);
+  }
+  protected emitEnd(
+    base: Omit<UsageEventEnd, "phase" | "endedAt">,
+    started?: number
+  ) {
+    return emitEnd(this.#monitor, base, started);
+  }
+
+  protected async callFunctionWithTelemetry(
+    context: TContext,
+    name: string,
+    params: any
+  ): Promise<unknown> {
+    const start = this.emitStart({
+      source: "function.call",
+      metadata: { name },
+    });
+    try {
+      const out = await this.functionCall(context, name, params);
+      this.emitEnd({
+        source: "function.call",
+        metadata: { name },
+        startedAt: start.startedAt,
+      });
+      return out;
+    } catch (err) {
+      this.emitEnd({
+        source: "function.call",
+        metadata: { name },
+        startedAt: start.startedAt,
+      });
+      throw err;
+    }
   }
 
   public abstract createModel<TModelContext>(
@@ -94,4 +207,5 @@ export abstract class AiProvider<TContext, TConfig = {}> {
 export interface AiEvaluationContext<TContext> {
   agent: AiEvaluator<TContext>;
   provider: AiProvider<TContext, unknown>;
+  monitor?: UsageMonitor;
 }
