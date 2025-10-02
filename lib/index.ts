@@ -10,6 +10,47 @@ export type AnalyzeOutput = {
   metadata: string[];
 };
 
+export type EmitResult<T extends UsageEvent> = {
+  event: T;
+  proceed: boolean;
+};
+
+export async function emitStartChecked(
+  monitor: UsageMonitor,
+  base: Omit<UsageEventStart, "phase" | "startedAt">
+): Promise<EmitResult<UsageEventStart>> {
+  const event: UsageEventStart = {
+    phase: "start",
+    startedAt: nowMs(),
+    ...base,
+  };
+  try {
+    const res = await monitor.onEvent(event as UsageEvent);
+    return { event, proceed: res !== false };
+  } catch {
+    return { event, proceed: false };
+  }
+}
+
+export async function emitEndChecked(
+  monitor: UsageMonitor,
+  base: Omit<UsageEventEnd, "phase" | "endedAt">,
+  started?: number
+): Promise<EmitResult<UsageEventEnd>> {
+  const event: UsageEventEnd = {
+    phase: "end",
+    endedAt: nowMs(),
+    startedAt: started ?? base.startedAt,
+    ...base,
+  };
+  try {
+    const res = await monitor.onEvent(event as UsageEvent);
+    return { event, proceed: res !== false };
+  } catch {
+    return { event, proceed: false };
+  }
+}
+
 export interface AnalysisResult {
   analysis: AnalyzeOutput;
   prompt: string;
@@ -46,7 +87,7 @@ export type UsageEventEnd = UsageEventBase & {
 export type UsageEvent = UsageEventStart | UsageEventEnd;
 
 export interface UsageMonitor {
-  onEvent(event: UsageEvent): void | Promise<void>;
+  onEvent(event: UsageEvent): void | boolean | Promise<void> | Promise<boolean>;
 }
 
 export class NoopUsageMonitor implements UsageMonitor {
@@ -157,29 +198,57 @@ export abstract class AiProvider<TContext, TConfig = {}> {
     return emitEnd(this.#monitor, base, started);
   }
 
+  protected emitStartChecked(
+    base: Omit<UsageEventStart, "phase" | "startedAt">
+  ) {
+    return emitStartChecked(this.#monitor, base);
+  }
+
+  protected emitEndChecked(
+    base: Omit<UsageEventEnd, "phase" | "endedAt">,
+    started?: number
+  ) {
+    return emitEndChecked(this.#monitor, base, started);
+  }
+
   protected async callFunctionWithTelemetry(
     context: TContext,
     name: string,
     params: any
   ): Promise<unknown> {
-    const start = this.emitStart({
+    const startRes = await emitStartChecked(this.monitor, {
       source: "function.call",
       metadata: { name },
     });
+
+    if (!startRes.proceed) {
+      return false;
+    }
+
     try {
       const out = await this.functionCall(context, name, params);
-      this.emitEnd({
-        source: "function.call",
-        metadata: { name },
-        startedAt: start.startedAt,
-      });
+
+      await emitEndChecked(
+        this.monitor,
+        {
+          source: "function.call",
+          metadata: { name },
+          startedAt: startRes.event.startedAt,
+        },
+        startRes.event.startedAt
+      );
+
       return out;
     } catch (err) {
-      this.emitEnd({
-        source: "function.call",
-        metadata: { name },
-        startedAt: start.startedAt,
-      });
+      await emitEndChecked(
+        this.monitor,
+        {
+          source: "function.call",
+          metadata: { name },
+          startedAt: startRes.event.startedAt,
+        },
+        startRes.event.startedAt
+      );
       throw err;
     }
   }
