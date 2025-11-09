@@ -38,7 +38,8 @@ class MyAiEvaluator extends AiEvaluator<MyContext> {
       functionCall: (
         context: MyContext,
         name: string,
-        params: any
+        params: any,
+        abortController?: AbortController
       ) => Promise<unknown>
     ) => AiProvider<MyContext, TConfig>,
     config: TConfig
@@ -165,7 +166,8 @@ export abstract class AiEvaluator<TContext> {
       functionCall: (
         context: TContext,
         name: string,
-        params: any
+        params: any,
+        abortController?: AbortController
       ) => Promise<unknown>
     ) => AiProvider<TContext, TConfig>,
     config: TConfig
@@ -187,7 +189,8 @@ export abstract class AiProvider<TContext, TConfig = {}> {
     functionCall: (
       context: TContext,
       name: string,
-      params: any
+      params: any,
+      abortController?: AbortController
     ) => Promise<unknown>
   );
 
@@ -195,20 +198,26 @@ export abstract class AiProvider<TContext, TConfig = {}> {
     context: TContext,
     userPrompt: string,
     previousPipeline: Record<string, GenericNode>,
-    onMessages?: (message: unknown[]) => Promise<void> | void
+    onMessages?: (message: unknown[]) => Promise<void> | void,
+    abortController?: AbortController
   ): Promise<AiResult<AnalysisResult>>;
 
   generate(
     context: TContext,
     analysisResult: AnalysisResult,
     previousPipeline: Record<string, GenericNode>,
-    onMessages?: (message: unknown[]) => Promise<void> | void
+    onMessages?: (message: unknown[]) => Promise<void> | void,
+    abortController?: AbortController
   ): Promise<AiResult<Pipeline>>;
 }
 ```
 
 - analyze: Produces an initial analysis of a user prompt against an existing pipeline.
 - generate: Builds or updates a `Pipeline` based on analysis results.
+
+### Aborting work
+
+Use the optional `AbortController` argument on `analyze` and `generate` when you need to cancel long‑running operations. Provide the controller you manage upstream and propagate its signal into any downstream SDK calls (including those made through `callFunctionWithTelemetry`). Reject the promise when cancellation happens so callers can react and telemetry can close out properly.
 
 ## Example Implementation
 

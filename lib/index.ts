@@ -134,7 +134,8 @@ export abstract class AiEvaluator<TContext> {
       functionCall: (
         context: TContext,
         name: string,
-        params: any
+        params: any,
+        abortController?: AbortController
       ) => Promise<unknown>
     ) => AiProvider<TContext, TConfig>,
     config: TConfig
@@ -166,7 +167,12 @@ export abstract class AiModel<TContext> {
 
 export abstract class AiProvider<TContext, TConfig = {}> {
   protected config: TConfig;
-  protected functionCall: (context: TContext, name: string, params: any) => any;
+  protected functionCall: (
+    context: TContext,
+    name: string,
+    params: any,
+    abortController?: AbortController
+  ) => any;
 
   #monitor: UsageMonitor;
 
@@ -175,7 +181,8 @@ export abstract class AiProvider<TContext, TConfig = {}> {
     functionCall: (
       context: TContext,
       name: string,
-      params: any
+      params: any,
+      abortController?: AbortController
     ) => Promise<unknown>,
     monitor?: UsageMonitor
   ) {
@@ -214,7 +221,8 @@ export abstract class AiProvider<TContext, TConfig = {}> {
   protected async callFunctionWithTelemetry(
     context: TContext,
     name: string,
-    params: any
+    params: any,
+    abortController?: AbortController
   ): Promise<unknown> {
     const startRes = await emitStartChecked(this.monitor, {
       source: "function.call",
@@ -226,7 +234,12 @@ export abstract class AiProvider<TContext, TConfig = {}> {
     }
 
     try {
-      const out = await this.functionCall(context, name, params);
+      const out = await this.functionCall(
+        context,
+        name,
+        params,
+        abortController
+      );
 
       await emitEndChecked(
         this.monitor,
@@ -262,14 +275,16 @@ export abstract class AiProvider<TContext, TConfig = {}> {
     context: TContext,
     userPrompt: string,
     previousPipeline: Record<string, GenericNode>,
-    onMessages?: (message: unknown[]) => Promise<void> | void
+    onMessages?: (message: unknown[]) => Promise<void> | void,
+    abortController?: AbortController
   ): Promise<AiResult<AnalysisResult>>;
 
   public abstract generate(
     context: TContext,
     analysisResult: AnalysisResult,
     previousPipeline: Record<string, GenericNode>,
-    onMessages?: (message: unknown[]) => Promise<void> | void
+    onMessages?: (message: unknown[]) => Promise<void> | void,
+    abortController?: AbortController
   ): Promise<AiResult<Pipeline>>;
 }
 
