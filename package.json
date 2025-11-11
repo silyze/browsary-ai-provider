@@ -1,6 +1,6 @@
 {
   "name": "@silyze/browsary-ai-provider",
-  "version": "1.2.2",
+  "version": "2.0.0",
   "description": "Browsary AI provider interface",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -147,6 +147,40 @@ export type AiResult<T> = {
   messages: object[];
 };
 
+export type AiAgentControlRequest =
+  | { type: "pause"; reason?: string }
+  | { type: "resume" }
+  | { type: "addMessages"; messages: unknown[] };
+
+export type AiAgentConversationState<TState = unknown> = {
+  id?: string;
+  state: TState;
+  status?: string;
+  metadata?: Record<string, unknown>;
+  isPaused?: boolean;
+  isComplete?: boolean;
+};
+
+export interface PipelineConversationCallbacks {
+  onPipelineUpdate(pipeline: Pipeline): Promise<void> | void;
+  onStatusUpdate?(status: string): Promise<void> | void;
+  onMessages?(messages: unknown[]): Promise<void> | void;
+}
+
+export interface PromptParams extends PipelineConversationCallbacks {
+  userPrompt: string;
+  previousPipeline: Record<string, GenericNode>;
+  abortController?: AbortController;
+  controlRequests?: AiAgentControlRequest[];
+}
+
+export interface ContinuePromptParams extends PipelineConversationCallbacks {
+  conversation: AiAgentConversationState;
+  previousPipeline: Record<string, GenericNode>;
+  abortController?: AbortController;
+  controlRequests?: AiAgentControlRequest[];
+}
+
 export type AiModelMessage = {
   type: "system" | "user";
   content: string;
@@ -271,21 +305,15 @@ export abstract class AiProvider<TContext, TConfig = {}> {
     context: TModelContext
   ): AiModel<TModelContext>;
 
-  public abstract analyze(
+  public abstract prompt(
     context: TContext,
-    userPrompt: string,
-    previousPipeline: Record<string, GenericNode>,
-    onMessages?: (message: unknown[]) => Promise<void> | void,
-    abortController?: AbortController
-  ): Promise<AiResult<AnalysisResult>>;
+    params: PromptParams
+  ): Promise<AiAgentConversationState>;
 
-  public abstract generate(
+  public abstract continuePrompt(
     context: TContext,
-    analysisResult: AnalysisResult,
-    previousPipeline: Record<string, GenericNode>,
-    onMessages?: (message: unknown[]) => Promise<void> | void,
-    abortController?: AbortController
-  ): Promise<AiResult<Pipeline>>;
+    params: ContinuePromptParams
+  ): Promise<AiAgentConversationState>;
 }
 
 export interface AiEvaluationContext<TContext> {
