@@ -67,6 +67,7 @@ export type UsageSource =
   | "model.promptWithSchema"
   | "pipeline.analyze"
   | "pipeline.generate"
+  | "agent.unified"
   | "function.call";
 
 export type UsageEventBase = {
@@ -167,6 +168,12 @@ export interface PipelineConversationCallbacks {
   onMessages?(messages: unknown[]): Promise<void> | void;
 }
 
+export interface FunctionCallStatusOptions {
+  abortController?: AbortController;
+  describe?: string;
+  onStatusUpdate?: PipelineConversationCallbacks["onStatusUpdate"];
+}
+
 export interface PromptParams extends PipelineConversationCallbacks {
   userPrompt: string;
   previousPipeline: Record<string, GenericNode>;
@@ -256,16 +263,37 @@ export abstract class AiProvider<TContext, TConfig = {}> {
     context: TContext,
     name: string,
     params: any,
-    abortController?: AbortController
+    options?: FunctionCallStatusOptions
   ): Promise<unknown> {
+    const statusCallback = options?.onStatusUpdate;
+    const abortController = options?.abortController;
+    const summary =
+      options?.describe ?? describeFunctionCallForStatus(name, params);
+
+    const safeStatusUpdate = async (message: string) => {
+      if (!statusCallback || !message) {
+        return;
+      }
+      try {
+        await statusCallback(message);
+      } catch {
+        // Ignore status update failures so function calls still proceed.
+      }
+    };
+
     const startRes = await emitStartChecked(this.monitor, {
       source: "function.call",
       metadata: { name },
     });
 
     if (!startRes.proceed) {
+      await safeStatusUpdate(
+        summary ? `Skipped ${summary} (monitor vetoed)` : ""
+      );
       return false;
     }
+
+    await safeStatusUpdate(summary ? `Calling ${summary}` : "");
 
     try {
       const out = await this.functionCall(
@@ -285,6 +313,8 @@ export abstract class AiProvider<TContext, TConfig = {}> {
         startRes.event.startedAt
       );
 
+      await safeStatusUpdate(summary ? `Finished ${summary}` : "");
+
       return out;
     } catch (err) {
       await emitEndChecked(
@@ -295,6 +325,18 @@ export abstract class AiProvider<TContext, TConfig = {}> {
           startedAt: startRes.event.startedAt,
         },
         startRes.event.startedAt
+      );
+
+      const errMsg =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+          ? err
+          : JSON.stringify(err);
+      await safeStatusUpdate(
+        summary
+          ? `Failed ${summary}: ${errMsg}`
+          : `Function call failed: ${errMsg}`
       );
       throw err;
     }
@@ -320,4 +362,38 @@ export interface AiEvaluationContext<TContext> {
   agent: AiEvaluator<TContext>;
   provider: AiProvider<TContext, unknown>;
   monitor?: UsageMonitor;
+}
+
+function describeFunctionCallForStatus(name: string, params: unknown): string {
+  const paramsPreview = summarizeParamsForStatus(params);
+  const target = `function "${name}"`;
+  return paramsPreview ? `${target} with ${paramsPreview}` : target;
+}
+
+function summarizeParamsForStatus(params: unknown): string {
+  if (params === undefined || params === null) {
+    return "";
+  }
+
+  if (
+    typeof params === "object" &&
+    !Array.isArray(params) &&
+    Object.keys(params as Record<string, unknown>).length === 0
+  ) {
+    return "";
+  }
+
+  try {
+    const json = JSON.stringify(params);
+    if (!json || json === "{}") {
+      return "";
+    }
+    const normalized = json.replace(/\s+/g, " ");
+    const limit = 180;
+    return normalized.length > limit
+      ? `${normalized.slice(0, limit)}...`
+      : normalized;
+  } catch {
+    return "provided parameters";
+  }
 }
